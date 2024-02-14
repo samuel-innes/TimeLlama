@@ -10,7 +10,13 @@ from torch.utils.data import Dataset
 import transformers
 from transformers import Trainer
 from transformers.trainer_pt_utils import LabelSmoother
+from trl import SFTTrainer
 import warnings
+
+from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
+peft_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1
+)
 #from fastchat.train.llama_flash_attn_monkey_patch import (
 #    #replace_llama_attn_with_flash_attn,
 #)
@@ -20,18 +26,21 @@ import warnings
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
 #add your own token here
-access_token = ""
+access_token = "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"
 
 @dataclass
 class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="meta-llama/Llama-2-13b-chat-hf")
+    model_name_or_path: Optional[str] = field(default="meta-llama/Llama-2-7b-chat-hf") #meta-llama/Llama-2-13b-chat
     flash_attn: bool = False
 
 
 @dataclass
 class DataArguments:
-    data_path: str = field(
+    train_data_path: str = field(
         default="dataset/train_dataset.json", metadata={"help": "Path to the training data."}
+    )
+    eval_data_path: str = field(
+        default="dataset/eval_dataset.json", metadata={"help": "Path to the eval data."}
     )
     lazy_preprocess: bool = False
 
@@ -151,8 +160,8 @@ def make_supervised_data_module(
         InstructionDataset
     )
     rank0_print("Loading data...")
-    train_dataset = dataset_cls(data_args.data_path, tokenizer=tokenizer)
-    eval_dataset = dataset_cls(data_args.data_path, tokenizer=tokenizer, partition="eval")
+    train_dataset = dataset_cls(data_args.train_data_path, tokenizer=tokenizer)
+    eval_dataset = dataset_cls(data_args.eval_data_path, tokenizer=tokenizer, partition="eval")
     #eval_dataset = dataset_cls("dataset/eval_dataset.json", tokenizer=tokenizer)
     return dict(train_dataset=train_dataset, eval_dataset=eval_dataset)
 
@@ -177,12 +186,15 @@ def train():
     model = transformers.LlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
-        token=access_token
+        #token=access_token,
+        #local_files_only=True
     )
-    model.config.use_cache = False
+    #model = get_peft_model(model, peft_config)
+    model.config.use_cache = True
+    #model.print_trainable_parameters()
     tokenizer = transformers.LlamaTokenizer.from_pretrained(
         model_args.model_name_or_path,
-        token=access_token
+        #token=access_token
     )
     tokenizer.add_special_tokens(
         {
@@ -193,15 +205,15 @@ def train():
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     trainer = Trainer(
-        model=model, tokenizer=tokenizer, args=training_args, **data_module
-    )
+        model=model, tokenizer=tokenizer, args=training_args, **data_module 
+    ) #peft_config=peft_config,
 
     
     #if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
     #    trainer.train(resume_from_checkpoint=False)
     #else:
     trainer.train()
-    model.config.use_cache = True
+    model.config.use_cache = False
     trainer.save_state()
     trainer_save_model_safe(trainer)
     #safe_save_model_for_hf_trainer(trainer=trainer, output_dir=training_args.output_dir)
